@@ -27,6 +27,10 @@ const C = {
   slate:      "#1A2A38",
 };
 
+// ── SOVEREIGN ENDPOINT ────────────────────────────────────────────────────────
+const CFM_ENDPOINT = "https://nng2sj7h3gew0pfq.us-east4.gcp.endpoints.huggingface.cloud";
+const HF_TOKEN = import.meta.env.VITE_HF_TOKEN;
+
 // ── MODES ─────────────────────────────────────────────────────────────────────
 const MODES = [
   {
@@ -97,7 +101,7 @@ You are familiar with:
 - Federal Indian law and the OB3 Act framework
 - Tribal technology sovereignty and data governance
 - Sovereign AI infrastructure considerations
-- Strategic partnership development with entities like OSL and 580 Strategies
+- Strategic partnership development
 
 You speak at an executive level — precise, analytical, and grounded in both Chickasaw values and modern strategic thinking.
 Always frame recommendations through the lens of long-term sovereign benefit to the Nation.`,
@@ -146,7 +150,6 @@ const StarField = () => {
       {stars.map((s,i) => (
         <circle key={i} cx={`${s.x}%`} cy={`${s.y}%`} r={s.r} fill="#E8DCC8" opacity={s.o}/>
       ))}
-      {/* Constellation lines */}
       <line x1="10%" y1="15%" x2="22%" y2="28%" stroke="#1A6A48" strokeWidth="0.3" opacity="0.15"/>
       <line x1="22%" y1="28%" x2="18%" y2="42%" stroke="#1A6A48" strokeWidth="0.3" opacity="0.15"/>
       <line x1="70%" y1="10%" x2="82%" y2="22%" stroke="#C8A020" strokeWidth="0.3" opacity="0.12"/>
@@ -163,7 +166,6 @@ const styles = `
   @keyframes shieldOn { 0%,100%{box-shadow:0 0 6px #1A6A4840} 50%{box-shadow:0 0 18px #1A6A48A0,0 0 36px #1A6A4840} }
   @keyframes typingDot { 0%,60%,100%{opacity:0.2;transform:translateY(0)} 30%{opacity:1;transform:translateY(-4px)} }
   @keyframes glowPulse { 0%,100%{text-shadow:0 0 10px #C8A02060} 50%{text-shadow:0 0 24px #C8A020A0,0 0 48px #C8A02040} }
-  @keyndef scanIn { from{width:0} to{width:100%} }
   .fade-up { animation: fadeUp 0.4s ease forwards; }
   .shield-glow { animation: shieldOn 2.5s ease-in-out infinite; }
   .gold-glow { animation: glowPulse 3s ease-in-out infinite; }
@@ -235,6 +237,7 @@ export default function ChikashaCFM() {
   const [shieldVisible, setShieldVisible] = useState(false);
   const [totalProtected, setTotalProtected] = useState(0);
   const [totalQueries, setTotalQueries] = useState(0);
+  const [endpointStatus, setEndpointStatus] = useState("sovereign");
   const chatEndRef = useRef(null);
 
   useEffect(() => {
@@ -268,22 +271,73 @@ export default function ChikashaCFM() {
     // Hide shield after 4 seconds
     setTimeout(() => setShieldVisible(false), 4000);
 
+    // Build conversation history as a formatted prompt for the CFM
+    const conversationHistory = newChat
+      .map(m => m.role === "user" ? `User: ${m.content}` : `Assistant: ${m.content}`)
+      .join("\n");
+
+    const fullPrompt = `${mode.system}\n\n${conversationHistory}\nAssistant:`;
+
     try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method:"POST",
-        headers:{ "Content-Type":"application/json" },
+      const res = await fetch(CFM_ENDPOINT, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${HF_TOKEN}`,
+        },
         body: JSON.stringify({
-          model:"claude-sonnet-4-20250514",
-          max_tokens:1000,
-          system: mode.system,
-          messages: newChat.map(m => ({ role:m.role, content:m.content })),
+          inputs: fullPrompt,
+          parameters: {
+            max_new_tokens: 500,
+            temperature: 0.7,
+            top_p: 0.9,
+            do_sample: true,
+            return_full_text: false,
+            stop: ["User:", "\nUser:"],
+          },
         }),
       });
+
+      if (!res.ok) {
+        // If endpoint is scaled to zero or waking up, show friendly message
+        if (res.status === 503) {
+          setChat([...newChat, { role:"assistant", content:"The Chikasha Foundational Model is waking up from sleep. Please try again in 30 seconds — the sovereign endpoint is initializing." }]);
+          setEndpointStatus("waking");
+          setLoading(false);
+          return;
+        }
+        throw new Error(`Endpoint error: ${res.status}`);
+      }
+
       const data = await res.json();
-      const assistantText = data.content?.[0]?.text || "No response received.";
+      let assistantText = "";
+
+      if (Array.isArray(data) && data[0]?.generated_text) {
+        assistantText = data[0].generated_text.trim();
+      } else if (data.generated_text) {
+        assistantText = data.generated_text.trim();
+      } else if (data.error) {
+        assistantText = "The sovereign endpoint returned an error: " + data.error;
+      } else {
+        assistantText = "No response received from the Chikasha Foundational Model.";
+      }
+
+      // Clean up any trailing incomplete sentences
+      const lastPeriod = Math.max(
+        assistantText.lastIndexOf("."),
+        assistantText.lastIndexOf("!"),
+        assistantText.lastIndexOf("?")
+      );
+      if (lastPeriod > assistantText.length * 0.7) {
+        assistantText = assistantText.substring(0, lastPeriod + 1);
+      }
+
+      setEndpointStatus("sovereign");
       setChat([...newChat, { role:"assistant", content:assistantText }]);
-    } catch {
-      setChat([...newChat, { role:"assistant", content:"Connection error. Please try again." }]);
+    } catch (err) {
+      console.error("CFM endpoint error:", err);
+      setChat([...newChat, { role:"assistant", content:"Unable to reach the Chikasha Foundational Model. The sovereign endpoint may be scaling up. Please try again in a moment." }]);
+      setEndpointStatus("error");
     }
     setLoading(false);
   };
@@ -293,6 +347,9 @@ export default function ChikashaCFM() {
   };
 
   const clearChat = () => { setChat([]); setShieldResult(null); setShieldVisible(false); };
+
+  const statusColor = endpointStatus === "sovereign" ? C.greenLight : endpointStatus === "waking" ? C.gold : C.red;
+  const statusLabel = endpointStatus === "sovereign" ? "CFM Live" : endpointStatus === "waking" ? "CFM Waking" : "CFM Offline";
 
   return (
     <div style={{ background:C.void, minHeight:"100vh", display:"flex", flexDirection:"column", fontFamily:"'Cormorant Garamond',Georgia,serif", position:"relative", overflow:"hidden" }}>
@@ -311,7 +368,7 @@ export default function ChikashaCFM() {
                 <div style={{ color:C.muted, fontSize:9, letterSpacing:2, textTransform:"uppercase", fontFamily:"Rajdhani,sans-serif" }}>Sovereign AI · Shield Protected · Chickasaw Nation</div>
               </div>
             </div>
-            {/* Shield stats */}
+            {/* Stats */}
             <div style={{ display:"flex", gap:8, alignItems:"center" }}>
               <div style={{ background:C.greenGlow, border:`1px solid ${C.green}40`, borderRadius:8, padding:"6px 10px", textAlign:"center" }}>
                 <div style={{ color:C.greenLight, fontFamily:"Rajdhani,sans-serif", fontSize:14, fontWeight:700 }}>{totalProtected}</div>
@@ -320,6 +377,10 @@ export default function ChikashaCFM() {
               <div style={{ background:C.panel, border:`1px solid ${C.border}`, borderRadius:8, padding:"6px 10px", textAlign:"center" }}>
                 <div style={{ color:C.bone, fontFamily:"Rajdhani,sans-serif", fontSize:14, fontWeight:700 }}>{totalQueries}</div>
                 <div style={{ color:C.muted, fontSize:8, letterSpacing:1, fontFamily:"Rajdhani,sans-serif" }}>QUERIES</div>
+              </div>
+              <div style={{ background:C.panel, border:`1px solid ${statusColor}40`, borderRadius:8, padding:"6px 10px", textAlign:"center" }}>
+                <div style={{ color:statusColor, fontFamily:"Rajdhani,sans-serif", fontSize:10, fontWeight:700 }}>{statusLabel}</div>
+                <div style={{ color:C.muted, fontSize:8, letterSpacing:1, fontFamily:"Rajdhani,sans-serif" }}>ENDPOINT</div>
               </div>
             </div>
           </div>
@@ -363,6 +424,12 @@ export default function ChikashaCFM() {
                 {mode.id === "leadership" && "Ask about governance, sovereignty strategy, or enterprise development."}
               </div>
 
+              {/* Sovereign badge */}
+              <div style={{ display:"inline-flex", alignItems:"center", gap:8, background:C.greenGlow, border:`1px solid ${C.green}40`, borderRadius:20, padding:"8px 16px", marginBottom:24 }}>
+                <span style={{ color:C.greenLight, fontSize:12 }}>⬡</span>
+                <span style={{ color:C.greenLight, fontFamily:"Rajdhani,sans-serif", fontSize:10, fontWeight:700, letterSpacing:1.5 }}>POWERED BY CHIKASHA FOUNDATIONAL MODEL · SOVEREIGN INFRASTRUCTURE</span>
+              </div>
+
               {/* Starter prompts */}
               <div style={{ display:"flex", flexWrap:"wrap", gap:10, justifyContent:"center", maxWidth:600, margin:"0 auto" }}>
                 {(mode.id === "citizen" ? [
@@ -376,15 +443,15 @@ export default function ChikashaCFM() {
                   "What are early signs of diabetes I should watch for?",
                   "How do I navigate IHS and Nation health services?",
                 ] : mode.id === "language" ? [
-                  "How do you say 'I love you' in Chickasaw?",
+                  "How do you say I love you in Chickasaw?",
                   "Teach me a Chickasaw greeting",
-                  "What does Chikashshanompa' mean?",
+                  "What does Chikashshanompa mean?",
                   "How is Chickasaw language structured?",
                 ] : [
                   "How should we structure a sovereign AI licensing agreement?",
                   "What is the OB3 Act and why does it matter?",
                   "How do we protect IP when pitching to the Nation?",
-                  "What's the strategic case for a tribal health OS?",
+                  "What is the strategic case for a tribal health OS?",
                 ]).map((p,i) => (
                   <button key={i} onClick={()=>setInput(p)} style={{ background:C.card, border:`1px solid ${C.border}`, color:C.boneDim, padding:"8px 14px", borderRadius:20, cursor:"pointer", fontSize:11, fontFamily:"'Cormorant Garamond',serif", fontStyle:"italic", transition:"all 0.2s" }}
                     onMouseEnter={e=>{ e.target.style.borderColor=mode.color; e.target.style.color=C.bone; }}
@@ -399,7 +466,6 @@ export default function ChikashaCFM() {
           {/* Messages */}
           {chat.map((msg, i) => (
             <div key={i} className="fade-up" style={{ marginBottom:16, display:"flex", flexDirection:"column", alignItems: msg.role==="user" ? "flex-end" : "flex-start" }}>
-              {/* Shield indicator for user messages */}
               {msg.role === "user" && msg.shield && msg.shield.detected.length > 0 && (
                 <div style={{ display:"flex", alignItems:"center", gap:5, marginBottom:4 }}>
                   <span style={{ color:C.greenLight, fontSize:10 }}>⬡</span>
@@ -439,22 +505,20 @@ export default function ChikashaCFM() {
       <div style={{ background:`${C.deep}F8`, borderTop:`1px solid ${C.border}`, padding:"16px 20px 20px", position:"sticky", bottom:0, zIndex:100, backdropFilter:"blur(12px)", flexShrink:0 }}>
         <div style={{ maxWidth:860, margin:"0 auto" }}>
 
-          {/* Live Shield display */}
           <ShieldDisplay result={shieldResult} visible={shieldVisible}/>
 
-          {/* Mode indicator */}
           <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
             <div style={{ display:"flex", alignItems:"center", gap:8 }}>
               <span style={{ color:mode.color, fontSize:12 }}>{mode.icon}</span>
               <span style={{ color:mode.color, fontFamily:"Rajdhani,sans-serif", fontSize:11, fontWeight:700, letterSpacing:1 }}>{mode.label} Mode Active</span>
               <Pill label="Shield On" color={C.greenLight}/>
+              <Pill label="Sovereign" color={C.gold} dot={true}/>
             </div>
             {chat.length > 0 && (
               <button onClick={clearChat} style={{ background:"transparent", border:`1px solid ${C.border}`, color:C.muted, padding:"4px 10px", borderRadius:6, cursor:"pointer", fontSize:10, fontFamily:"Rajdhani,sans-serif", letterSpacing:0.5 }}>Clear</button>
             )}
           </div>
 
-          {/* Input */}
           <div style={{ display:"flex", gap:10, alignItems:"flex-end" }}>
             <div style={{ flex:1, background:C.surface, border:`1px solid ${C.border}`, borderRadius:12, overflow:"hidden", transition:"border-color 0.2s" }}
               onFocus={e=>e.currentTarget.style.borderColor=mode.color}
