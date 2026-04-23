@@ -27,10 +27,6 @@ const C = {
   slate:      "#1A2A38",
 };
 
-// ── SOVEREIGN ENDPOINT ────────────────────────────────────────────────────────
-const CFM_ENDPOINT = "https://nng2sj7h3gew0pfq.us-east4.gcp.endpoints.huggingface.cloud";
-const HF_TOKEN = import.meta.env.VITE_HF_TOKEN;
-
 // ── MODES ─────────────────────────────────────────────────────────────────────
 const MODES = [
   {
@@ -279,12 +275,10 @@ export default function ChikashaCFM() {
     const fullPrompt = `${mode.system}\n\n${conversationHistory}\nAssistant:`;
 
     try {
-      const res = await fetch(CFM_ENDPOINT, {
+      // ── PROXY CALL — token stays server-side, no CORS issues ──
+      const res = await fetch("/api/chat", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${HF_TOKEN}`,
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           inputs: fullPrompt,
           parameters: {
@@ -299,7 +293,6 @@ export default function ChikashaCFM() {
       });
 
       if (!res.ok) {
-        // If endpoint is scaled to zero or waking up, show friendly message
         if (res.status === 503) {
           setChat([...newChat, { role:"assistant", content:"The Chikasha Foundational Model is waking up from sleep. Please try again in 30 seconds — the sovereign endpoint is initializing." }]);
           setEndpointStatus("waking");
@@ -335,7 +328,7 @@ export default function ChikashaCFM() {
       setEndpointStatus("sovereign");
       setChat([...newChat, { role:"assistant", content:assistantText }]);
     } catch (err) {
-      console.error("CFM endpoint error:", err);
+      console.error("CFM proxy error:", err);
       setChat([...newChat, { role:"assistant", content:"Unable to reach the Chikasha Foundational Model. The sovereign endpoint may be scaling up. Please try again in a moment." }]);
       setEndpointStatus("error");
     }
