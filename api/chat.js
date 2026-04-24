@@ -10,7 +10,10 @@ export default async function handler(req, res) {
   if (!inputs) return res.status(400).json({ error: "Missing inputs" });
 
   const HF_TOKEN = process.env.HF_TOKEN;
-  const CFM_ENDPOINT = "https://nng2sj7h3gew0pfq.us-east4.gcp.endpoints.huggingface.cloud";
+  const CFM_ENDPOINT = process.env.CFM_ENDPOINT || "https://nng2sj7h3gew0pfq.us-east4.gcp.endpoints.huggingface.cloud";
+
+  if (!HF_TOKEN) return res.status(500).json({ error: "HF_TOKEN not configured" });
+  if (!CFM_ENDPOINT) return res.status(500).json({ error: "CFM_ENDPOINT not configured" });
 
   try {
     const response = await fetch(CFM_ENDPOINT, {
